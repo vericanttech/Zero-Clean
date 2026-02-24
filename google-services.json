@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "916594452857",
+    "project_id": "samafoto-efefc",
+    "storage_bucket": "samafoto-efefc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:916594452857:android:2f8e7aa888c4a72eab67a8",
+        "android_client_info": {
+          "package_name": "com.thierno.zeroclean"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "916594452857-sopi6jj7c13nonkjaliudohvc27nr0l2.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIqGtD8OXY5nHylv1ytbNXXDVbK_VUVbM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "916594452857-sopi6jj7c13nonkjaliudohvc27nr0l2.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

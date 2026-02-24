@@ -1,0 +1,59 @@
+name: zero_clean
+description: Zero-Clean Mobile Data Collector - Structured dataset capture tool
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Camera & media
+  camera: ^0.10.5+9
+  image_picker: ^1.0.7
+
+  # File system
+  path_provider: ^2.1.2
+  path: ^1.9.0
+  device_info_plus: ^11.0.0
+
+  # Database
+  sqflite: ^2.3.2
+
+  # State management
+  provider: ^6.1.2
+
+  # Sensors
+  sensors_plus: ^4.0.2
+
+  # JSON
+  # Uncomment when adding real YOLO model:
+  # tflite_flutter: ^0.10.4
+  dart_json_mapper: ^2.2.3
+
+  # UI extras
+  fl_chart: ^0.67.0
+  permission_handler: ^11.3.1
+  open_filex: ^4.5.0
+  share_plus: ^7.2.2
+  intl: ^0.19.0
+  uuid: ^4.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - assets/guide/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: assets/zero_clean_app_icon.png
