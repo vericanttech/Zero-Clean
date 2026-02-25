@@ -4,20 +4,15 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 import '../providers/app_state.dart';
 import '../widgets/widgets.dart';
 import '../theme.dart';
 import '../models/models.dart';
-
-/// First letter of every word capital, rest lowercase (e.g. "fruits" → "Fruits").
-String _titleCase(String s) {
-  final t = s.trim();
-  if (t.isEmpty) return t;
-  return t.split(RegExp(r'\s+')).map((w) {
-    if (w.isEmpty) return w;
-    return w[0].toUpperCase() + w.substring(1).toLowerCase();
-  }).join(' ');
-}
+import '../utils/sync_error_message.dart';
+import '../utils/text_normalization.dart';
 
 class SetupScreen extends StatelessWidget {
   const SetupScreen({super.key});
@@ -29,80 +24,396 @@ class SetupScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: const [
-          SectionHeader(title: 'Magasins'),
-          _ShopList(),
-          SizedBox(height: 20),
+          _MagasinSectionExpansion(),
+          SizedBox(height: 24),
+          _SyncPullSectionExpansion(),
+          SizedBox(height: 24),
           SectionHeader(title: 'Variantes de produits'),
           _VariantList(),
+          SizedBox(height: 24),
+          SectionHeader(title: 'Compte'),
+          _SignOutTile(),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton.extended(
-            heroTag: 'add_variant',
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: ZCTheme.surface,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              builder: (_) => const _AddVariantSheet(),
-            ),
-            icon: const Icon(Icons.add, color: ZCTheme.bg),
-            label: const Text('Ajouter une variante',
-                style: TextStyle(color: ZCTheme.bg, fontWeight: FontWeight.w700)),
-            backgroundColor: ZCTheme.accent,
+      floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'add_variant',
+        onPressed: () => showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: ZCTheme.surface,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
-          const SizedBox(height: 10),
-          FloatingActionButton.extended(
-            heroTag: 'add_shop',
-            onPressed: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              backgroundColor: ZCTheme.surface,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
-              builder: (_) => const _AddShopSheet(),
-            ),
-            icon: const Icon(Icons.add_business_outlined, color: ZCTheme.bg),
-            label: const Text('Ajouter un magasin',
-                style: TextStyle(color: ZCTheme.bg, fontWeight: FontWeight.w700)),
-            backgroundColor: ZCTheme.accentDim,
-          ),
-        ],
+          builder: (_) => const _AddVariantSheet(),
+        ),
+        icon: const Icon(Icons.add, color: ZCTheme.bg),
+        label: const Text('Ajouter une variante',
+            style: TextStyle(color: ZCTheme.bg, fontWeight: FontWeight.w700)),
+        backgroundColor: ZCTheme.accent,
       ),
     );
   }
 }
 
-class _ShopList extends StatelessWidget {
-  const _ShopList();
+// ── Magasin (optional name + GPS) ─────────────────────
+
+/// Wraps [_MagasinSection] in a collapsible expansion tile.
+class _MagasinSectionExpansion extends StatelessWidget {
+  const _MagasinSectionExpansion();
 
   @override
   Widget build(BuildContext context) {
-    final shops = context.watch<AppState>().shops;
-    if (shops.isEmpty) {
-      return const EmptyState(message: 'Aucun magasin. Ajoutez votre premier magasin.');
-    }
-    return Column(
-      children: shops
-          .map((s) => Card(
-                child: ListTile(
-                  leading:
-                      const Icon(Icons.store_outlined, color: ZCTheme.accent),
-                  title: Text(s.name,
-                      style: const TextStyle(color: ZCTheme.textPrimary)),
-                  subtitle: s.locationNote.isNotEmpty
-                      ? Text(s.locationNote,
-                          style: const TextStyle(color: ZCTheme.textMuted))
-                      : null,
-                ),
-              ))
-          .toList(),
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+        childrenPadding: const EdgeInsets.only(top: 8, bottom: 4),
+        title: Text(
+          'MAGASIN',
+          style: TextStyle(
+            color: ZCTheme.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        children: const [_MagasinSection()],
+      ),
     );
+  }
+}
+
+class _MagasinSection extends StatefulWidget {
+  const _MagasinSection();
+
+  @override
+  State<_MagasinSection> createState() => _MagasinSectionState();
+}
+
+class _MagasinSectionState extends State<_MagasinSection> {
+  late TextEditingController _nameCtrl;
+  double? _latitude;
+  double? _longitude;
+  bool _locationLoading = false;
+  String? _locationError;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController();
+    _nameCtrl.addListener(() => setState(() {}));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shop = context.read<AppState>().selectedShop;
+    if (shop == null) return;
+    if (_nameCtrl.text.isEmpty && shop.name.isNotEmpty) _nameCtrl.text = shop.name;
+    if (_latitude == null && shop.latitude != null) _latitude = shop.latitude;
+    if (_longitude == null && shop.longitude != null) _longitude = shop.longitude;
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _useMyLocation() async {
+    setState(() {
+      _locationError = null;
+      _locationLoading = true;
+    });
+    try {
+      final permission = await Permission.location.request();
+      if (!permission.isGranted) {
+        if (mounted) setState(() {
+          _locationError = 'Autorisation de localisation refusée';
+          _locationLoading = false;
+        });
+        return;
+      }
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (mounted) setState(() {
+          _locationError = 'Activez la localisation dans les paramètres';
+          _locationLoading = false;
+        });
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+      );
+      if (mounted) setState(() {
+        _latitude = pos.latitude;
+        _longitude = pos.longitude;
+        _locationError = null;
+        _locationLoading = false;
+      });
+    } catch (e) {
+      if (mounted) setState(() {
+        _locationError = 'Impossible d\'obtenir la position';
+        _locationLoading = false;
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final appState = context.read<AppState>();
+    if (appState.selectedShop == null) return;
+    setState(() => _saving = true);
+    try {
+      final name = _nameCtrl.text.trim();
+      await appState.updateShopProfile(
+        name: name.isEmpty ? null : name,
+        latitude: _latitude,
+        longitude: _longitude,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Magasin mis à jour'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur: $e'),
+            backgroundColor: ZCTheme.critical,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final shop = state.selectedShop;
+    if (shop == null) return const SizedBox.shrink();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _nameCtrl,
+              style: const TextStyle(color: ZCTheme.textPrimary),
+              decoration: InputDecoration(
+                labelText: _nameCtrl.text.trim().isEmpty ? 'Nom du magasin (optionnel)' : null,
+                hintText: 'ex. Boutique Moussa',
+                prefixIcon: const Icon(Icons.store_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _locationLoading ? null : _useMyLocation,
+                  icon: _locationLoading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.my_location, size: 18),
+                  label: Text(_locationLoading ? 'Chargement…' : 'Ma position (optionnel)'),
+                ),
+                if (_latitude != null && _longitude != null) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}',
+                      style: const TextStyle(
+                        color: ZCTheme.textMuted,
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            if (_locationError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _locationError!,
+                style: const TextStyle(color: ZCTheme.critical, fontSize: 12),
+              ),
+            ],
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _saving ? null : _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: ZCTheme.accent,
+                  foregroundColor: ZCTheme.bg,
+                ),
+                child: _saving
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: ZCTheme.bg),
+                      )
+                    : const Text('Enregistrer'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Synchronisation (manual Sync / Pull) ─────────────────────
+
+/// Wraps [_SyncPullSection] in a collapsible expansion tile.
+class _SyncPullSectionExpansion extends StatelessWidget {
+  const _SyncPullSectionExpansion();
+
+  @override
+  Widget build(BuildContext context) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+        childrenPadding: const EdgeInsets.only(top: 8, bottom: 4),
+        title: Text(
+          'SYNCHRONISATION',
+          style: TextStyle(
+            color: ZCTheme.textMuted,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
+          ),
+        ),
+        children: const [_SyncPullSection()],
+      ),
+    );
+  }
+}
+
+class _SyncPullSection extends StatelessWidget {
+  const _SyncPullSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final hasLocalData = state.shops.isNotEmpty;
+    final syncing = state.isSyncingOrWriting;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Sync envoie les données locales vers Firebase. Récupérer charge les données depuis Firebase (uniquement quand il n\'y a pas de données locales).',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: ZCTheme.textMuted),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: ElevatedButton(
+                    onPressed: syncing ? null : () => _sync(context),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: ZCTheme.accent,
+                      foregroundColor: ZCTheme.bg,
+                      minimumSize: const Size(140, 48),
+                    ),
+                    child: syncing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: ZCTheme.bg),
+                          )
+                        : const Text('Synchroniser'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: OutlinedButton(
+                    onPressed: (!syncing && !hasLocalData) ? () => _pull(context) : null,
+                    child: const Text('Récupérer'),
+                  ),
+                ),
+              ],
+            ),
+            if (hasLocalData)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Récupérer désactivé : données locales présentes.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: ZCTheme.textMuted, fontSize: 11),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sync(BuildContext context) async {
+    final state = context.read<AppState>();
+    try {
+      await state.syncNow();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Synchronisation terminée'), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(userFriendlySyncError(e)),
+            backgroundColor: ZCTheme.critical,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _pull(BuildContext context) async {
+    final state = context.read<AppState>();
+    if (state.shops.isNotEmpty) return;
+    try {
+      await state.pullNow();
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Données récupérées'), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(userFriendlySyncError(e)),
+            backgroundColor: ZCTheme.critical,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 }
 
@@ -159,83 +470,19 @@ class _VariantList extends StatelessWidget {
   }
 }
 
-// ── Add Shop Sheet ─────────────────────────────
+// ── Sign out ───────────────────────────────────
 
-class _AddShopSheet extends StatefulWidget {
-  const _AddShopSheet();
-
-  @override
-  State<_AddShopSheet> createState() => _AddShopSheetState();
-}
-
-class _AddShopSheetState extends State<_AddShopSheet> {
-  final _nameCtrl = TextEditingController();
-  final _locationCtrl = TextEditingController();
-  bool _saving = false;
+class _SignOutTile extends StatelessWidget {
+  const _SignOutTile();
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 24,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Ajouter un magasin',
-              style: TextStyle(
-                  color: ZCTheme.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800)),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _nameCtrl,
-            style: const TextStyle(color: ZCTheme.textPrimary),
-            decoration: const InputDecoration(
-              labelText: 'Nom du magasin',
-              hintText: 'ex. Boutique_Moussa',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _locationCtrl,
-            style: const TextStyle(color: ZCTheme.textPrimary),
-            decoration: const InputDecoration(
-              labelText: 'Note d\'emplacement',
-              hintText: 'ex. Dakar Centre',
-            ),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _saving
-                  ? null
-                  : () async {
-                      if (_nameCtrl.text.trim().isEmpty) return;
-                      setState(() => _saving = true);
-                      await context.read<AppState>().addShop(
-                            _nameCtrl.text
-                                .trim()
-                                .replaceAll(' ', '_'),
-                            _locationCtrl.text.trim(),
-                          );
-                      if (mounted) Navigator.pop(context);
-                    },
-              child: _saving
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: ZCTheme.bg))
-                  : const Text('Enregistrer le magasin'),
-            ),
-          ),
-        ],
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.logout, color: ZCTheme.textSecondary),
+        title: const Text('Se déconnecter',
+            style: TextStyle(color: ZCTheme.textPrimary)),
+        onTap: () => FirebaseAuth.instance.signOut(),
       ),
     );
   }
@@ -296,16 +543,21 @@ class _AddVariantSheetState extends State<_AddVariantSheet> {
   }
 
   String get _categoryValue =>
-      _category == 'Autre' ? _titleCase(_categoryCustomCtrl.text.trim()) : _category;
+      _category == 'Autre' ? normalizeCategory(_categoryCustomCtrl.text) : _category;
   String get _volumeValue =>
-      _volume == 'Autre' ? _volumeCustomCtrl.text.trim() : _volume;
+      _volume == 'Autre' ? normalizeVariantName(_volumeCustomCtrl.text) : _volume;
   String get _materialValue =>
-      _material == 'Autre' ? _materialCustomCtrl.text.trim() : _material;
+      _material == 'Autre' ? normalizeVariantName(_materialCustomCtrl.text) : _material;
 
   @override
   Widget build(BuildContext context) {
-    final preview = '${_brandCtrl.text}_${_subBrandCtrl.text}_${_volumeValue}_${_materialValue}'
-        .replaceAll(' ', '_');
+    final brand = normalizeVariantName(_brandCtrl.text);
+    final subBrand = normalizeVariantName(_subBrandCtrl.text);
+    final parts = subBrand.isEmpty
+        ? [brand, _volumeValue, _materialValue]
+        : [brand, subBrand, _volumeValue, _materialValue];
+    final preview = collapseUnderscores(
+        parts.where((s) => s.isNotEmpty).join('_'));
 
     return Padding(
       padding: EdgeInsets.only(
@@ -379,18 +631,37 @@ class _AddVariantSheetState extends State<_AddVariantSheet> {
                         final category = _categoryValue.isEmpty
                             ? 'Non catégorisé'
                             : _categoryValue;
-                        final brand = _titleCase(_brandCtrl.text.trim()).replaceAll(' ', '_');
-                        final subBrand = _titleCase(_subBrandCtrl.text.trim()).replaceAll(' ', '_');
-                        await context.read<AppState>().addVariant(
+                        final brand = normalizeVariantName(_brandCtrl.text);
+                        final subBrand = normalizeVariantName(_subBrandCtrl.text);
+                        final appState = context.read<AppState>();
+                        appState.duplicateOfFullLabel = null;
+                        await appState.addVariant(
                               Variant(
                                 category: category,
                                 brand: brand,
                                 subBrand: subBrand,
-                                volume: _volumeValue.replaceAll(' ', '_'),
-                                material: _materialValue.replaceAll(' ', '_'),
+                        volume: _volumeValue,
+                        material: _materialValue,
                               ),
                             );
-                        if (mounted) Navigator.pop(context);
+                        if (!mounted) return;
+                        setState(() => _saving = false);
+                        final dup = appState.duplicateOfFullLabel;
+                        if (dup != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Très similaire à : $dup\nUtilisez un autre nom ou synchronisez.',
+                                style: const TextStyle(color: ZCTheme.textPrimary),
+                              ),
+                              backgroundColor: ZCTheme.gold,
+                              duration: const Duration(seconds: 4),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                          return;
+                        }
+                        Navigator.pop(context);
                       },
                 child: _saving
                     ? const SizedBox(

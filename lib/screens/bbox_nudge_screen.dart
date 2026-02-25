@@ -14,12 +14,14 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../providers/annotation_state.dart';
 import '../providers/app_state.dart';
 import '../services/filesystem_service.dart';
+import '../services/sync_service.dart';
 import '../services/yolo_service.dart';
 import '../widgets/bbox_painter.dart';
 import '../widgets/widgets.dart';
@@ -33,6 +35,9 @@ class BBoxNudgeScreen extends StatefulWidget {
   final List<Variant> allVariants;
   /// When true, save will move file to context folder and increment DB count.
   final bool isUnprocessed;
+  /// Shop document id (preferred for ID-based JSON). Used to find shop when saving.
+  final String? shopId;
+  /// Legacy: shop name for finding shop when shopId not set.
   final String? shopName;
   final String? category;
   final String? variantLabel;
@@ -45,6 +50,7 @@ class BBoxNudgeScreen extends StatefulWidget {
     this.variant,
     this.allVariants = const [],
     this.isUnprocessed = false,
+    this.shopId,
     this.shopName,
     this.category,
     this.variantLabel,
@@ -81,12 +87,53 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
   @override
   void initState() {
     super.initState();
-    _session = AnnotationSession(initial: widget.initialAnnotations);
+    _session = AnnotationSession(
+        initial: _resolveLabels(widget.initialAnnotations, widget.allVariants));
     _setMetadataDefaults();
     _loadMetadataFromJson();
     _loadImageSize();
+    // Processed images: if no annotations were passed (e.g. from review), load from JSON so boxes are drawn
+    if (!widget.isUnprocessed && widget.initialAnnotations.isEmpty) {
+      _loadAnnotationsFromJson();
+    }
     Future.delayed(const Duration(seconds: 4),
         () { if (mounted) setState(() => _showInstructions = false); });
+  }
+
+  /// Resolve variant_id to fullLabel so loaded annotations show the product name.
+  static List<Annotation> _resolveLabels(
+      List<Annotation> annotations, List<Variant> variants) {
+    final byId = {for (final v in variants) v.id: v};
+    return annotations
+        .map((a) {
+          if (a.variantId == null || a.variantId!.isEmpty) return a;
+          final v = byId[a.variantId];
+          return v != null ? a.copyWith(fullLabel: v.fullLabel) : a;
+        })
+        .toList();
+  }
+
+  /// Load annotations from the sidecar JSON (used for processed images when entry had no annotations).
+  Future<void> _loadAnnotationsFromJson() async {
+    final file = File(widget.jsonPath);
+    if (!await file.exists()) return;
+    try {
+      final raw = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final annList = raw['annotations'] as List?;
+      if (annList == null || annList.isEmpty) return;
+      final list = <Annotation>[];
+      for (final a in annList) {
+        try {
+          if (a is Map<String, dynamic>) list.add(Annotation.fromMap(a));
+        } catch (_) {}
+      }
+      final resolved = _resolveLabels(list, widget.allVariants);
+      if (resolved.isNotEmpty && mounted) {
+        setState(() {
+          _session = AnnotationSession(initial: resolved);
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadImageSize() async {
@@ -124,7 +171,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
         _condition = meta['condition'] as String? ?? 'good';
         _occlusion = meta['occlusion'] as String? ?? 'none';
         _deviceModel = meta['device_model'] as String?;
-        final ctxStr = raw['shop_context'] as String? ?? 'single';
+        final ctxStr = raw['context'] as String? ?? raw['shop_context'] as String? ?? 'single';
         _context = CaptureContext.values
             .firstWhere(
               (c) => c.name == ctxStr,
@@ -235,7 +282,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
       // Run YOLO first (fast, even stub) — box appears while picker is open
       final detection = await YoloService.instance.propose(
         tapNorm: tapNorm,
-        label: widget.variant?.fullLabel ?? 'Product',
+        label: widget.variant?.fullLabel ?? 'Produit',
       );
 
       // ── Label picker ──────────────────────────────────────────────────
@@ -267,14 +314,15 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
       }
 
       final v = pickedVariant ?? widget.variant;
-      final label = v?.fullLabel ?? 'Product';
+      final label = v?.fullLabel ?? 'Produit';
 
       final ann = Annotation(
+        variantId: v?.id,
+        fullLabel: label,
         brand: v?.brand ?? label.split('_').first,
         subBrand: v?.subBrand ?? '',
         volume: v?.volume ?? '',
         material: v?.material ?? '',
-        fullLabel: label,
         bbox: detection.bbox,
         verified: false,
       );
@@ -283,7 +331,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
       _session.addAnnotation(ann);
       _confidences[idx] = detection.confidence;
     } catch (e) {
-      _showSnack('YOLO error: $e');
+      _showSnack('Erreur YOLO : $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -303,7 +351,13 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
       if (await file.exists()) {
         raw = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       }
-      raw['annotations'] = _session.toMapList();
+      raw['shop_id'] = widget.shopId;
+      raw['context'] = _context.name;
+      raw['shop_context'] = _context.name;
+      raw['annotations'] = _session.annotations.map((a) {
+        final vid = a.variantId ?? widget.allVariants.where((v) => v.fullLabel == a.displayLabel).firstOrNull?.id ?? '';
+        return {'variant_id': vid, 'bbox': a.bbox.toList(), 'verified': a.verified};
+      }).toList();
       raw['metadata'] = {
         'lighting': _lighting,
         'angle': _angle,
@@ -313,54 +367,61 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
         'occlusion': _occlusion,
         if (_deviceModel != null) 'device_model': _deviceModel,
       };
-      raw['shop_context'] = _context.name;
 
-      if (widget.isUnprocessed &&
-          widget.shopName != null &&
-          widget.category != null &&
-          widget.variantLabel != null) {
-        final fs = FileSystemService.instance;
-        // File goes to initial/intended variant's folder
-        await fs.moveToContextFolder(
-          currentImagePath: widget.imagePath,
-          currentJsonPath: widget.jsonPath,
-          shopName: widget.shopName!,
-          category: widget.category!,
-          variantLabel: widget.variantLabel!,
-          context: _context,
-          fullJson: raw,
-        );
+      if (widget.isUnprocessed && (widget.shopId != null || widget.shopName != null)) {
         final appState = context.read<AppState>();
-        final shop = appState.shops
-            .where((s) => s.name == widget.shopName)
-            .firstOrNull;
+        final shop = widget.shopId != null
+            ? appState.shops.where((s) => s.id == widget.shopId).firstOrNull
+            : appState.shops.where((s) => s.name == widget.shopName).firstOrNull;
         if (shop?.id != null) {
-          // Count each distinct product in the annotations (one increment per variant in this image)
-          final distinctLabels = _session.annotations
-              .map((a) => a.fullLabel)
-              .toSet();
-          for (final fullLabel in distinctLabels) {
-            final v = widget.allVariants
-                .where((v) => v.fullLabel == fullLabel)
-                .firstOrNull;
-            if (v?.id != null) {
-              await appState.recordCaptureFor(v!.id!, shop!.id!, _context);
+          final userId = FirebaseAuth.instance.currentUser?.uid;
+          if (userId == null) {
+            _showSnack('Non connecté');
+            return;
+          }
+          if (!FileSystemService.instance.validateProcessedJson(raw)) {
+            _showSnack('Ajoutez au moins une annotation et définissez le contexte');
+            return;
+          }
+          final variantsByFullLabel = {
+            for (final v in widget.allVariants) v.fullLabel: v
+          };
+          try {
+            final payload = await FileSystemService.instance.processLocallyOnly(
+              currentImagePath: widget.imagePath,
+              currentJsonPath: widget.jsonPath,
+              fullJson: raw,
+              shopId: shop!.id!,
+              userId: userId,
+              context: _context,
+              variantsByFullLabel: variantsByFullLabel,
+            );
+            final variantIds = (payload['variant_ids'] as List?)?.cast<String>() ?? [];
+            for (final vid in variantIds) {
+              if (vid.isNotEmpty) {
+                await appState.recordCaptureFor(vid, shop.id!, _context);
+              }
             }
+            await SyncService.instance.queueProcessedImage(payload);
+            await appState.refreshProgress();
+            _session.saved = true;
+            if (mounted) {
+              _showSnack('💾 Enregistré localement · envoyé au prochain Sync');
+              Navigator.of(context).pop(true);
+            }
+            return;
+          } catch (e) {
+            _showSnack('Erreur: $e');
+            return;
           }
         }
-        _session.saved = true;
-        if (mounted) {
-          _showSnack('💾 Processed · moved to ${_context.name}');
-          Navigator.of(context).pop(true);
-        }
-        return;
       }
 
       await file.writeAsString(const JsonEncoder.withIndent('  ').convert(raw));
       _session.saved = true;
-      _showSnack('💾 Saved · ${_session.annotations.length} box${_session.annotations.length == 1 ? '' : 'es'}');
+      _showSnack('💾 Enregistré · ${_session.annotations.length} boîte${_session.annotations.length == 1 ? '' : 's'}');
     } catch (e) {
-      _showSnack('Save error: $e');
+      _showSnack('Erreur d\'enregistrement : $e');
     }
   }
 
@@ -372,7 +433,8 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
     for (int i = 0; i < _session.annotations.length; i++) {
       final a = _session.annotations[i];
       final b = initial[i];
-      if (a.fullLabel != b.fullLabel ||
+      if (a.displayLabel != b.displayLabel ||
+          a.variantId != b.variantId ||
           a.verified != b.verified ||
           a.bbox.toList() != b.bbox.toList()) {
         return true;
@@ -387,18 +449,18 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: ZCTheme.surface,
-        title: const Text('Unsaved changes',
+        title: const Text('Modifications non enregistrées',
             style: TextStyle(color: ZCTheme.textPrimary)),
-        content: const Text('Save before leaving?',
+        content: const Text('Enregistrer avant de quitter ?',
             style: TextStyle(color: ZCTheme.textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Discard', style: TextStyle(color: ZCTheme.critical)),
+            child: const Text('Abandonner', style: TextStyle(color: ZCTheme.critical)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
+            child: const Text('Enregistrer'),
           ),
         ],
       ),
@@ -436,8 +498,80 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
               onDelete: _session.removeSelected,
               onUndo: _session.undo,
               onSave: _save,
+              onOptions: _showMetadataSheet,
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _showExampleSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: ZCTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Exemple d\'annotation',
+                style: TextStyle(
+                  color: ZCTheme.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Bonne annotation vs à éviter.',
+                style: TextStyle(
+                  color: ZCTheme.textMuted,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset(
+                  'assets/annotation_bonne.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => _AnnotationPlaceholder(
+                    icon: Icons.check_circle_outline,
+                    label: 'Bonne annotation',
+                    desc: 'L\'objet est entièrement dans le cadre.',
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset(
+                  'assets/annotation_eviter.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => _AnnotationPlaceholder(
+                    icon: Icons.cancel_outlined,
+                    label: 'À éviter',
+                    desc: 'Ne coupez pas l\'objet.',
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Fermer'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -463,7 +597,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Context, lighting, angle, condition',
+                const Text('Contexte, éclairage, angle, état',
                     style: TextStyle(
                         color: ZCTheme.textMuted,
                         fontSize: 12,
@@ -510,7 +644,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
                   width: double.infinity,
                   child: OutlinedButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('Close'),
+                    child: const Text('Fermer'),
                   ),
                 ),
               ],
@@ -543,9 +677,9 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
         Padding(
           padding: const EdgeInsets.only(right: 4),
           child: TextButton.icon(
-            onPressed: _showMetadataSheet,
-            icon: const Icon(Icons.tune_rounded, size: 20, color: ZCTheme.accent),
-            label: const Text('OPTIONS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.5, color: ZCTheme.accent)),
+            onPressed: _showExampleSheet,
+            icon: const Icon(Icons.help_outline_rounded, size: 20, color: ZCTheme.accent),
+            label: const Text('EXEMPLE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.5, color: ZCTheme.accent)),
           ),
         ),
         ListenableBuilder(
@@ -561,7 +695,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
           child: TextButton.icon(
             onPressed: _save,
             icon: const Icon(Icons.save_outlined, size: 16),
-            label: const Text('SAVE',
+            label: const Text('ENREGISTRER',
                 style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12)),
             style: TextButton.styleFrom(foregroundColor: ZCTheme.accent),
           ),
@@ -643,7 +777,7 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
                               strokeWidth: 2, color: ZCTheme.accent),
                         ),
                         SizedBox(width: 8),
-                        Text('SNAPPING…',
+                        Text('DÉTECTION…',
                             style: TextStyle(
                                 color: ZCTheme.accent,
                                 fontSize: 11,
@@ -671,11 +805,11 @@ class _BBoxNudgeScreenState extends State<BBoxNudgeScreen> {
                       child: const Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _HintRow('👆  TAP', 'empty area → add box'),
+                          _HintRow('👆  APPUI', 'zone vide → ajouter une boîte'),
                           SizedBox(height: 10),
-                          _HintRow('✋  DRAG', 'inside box → move it'),
+                          _HintRow('✋  GLISSER', 'dans la boîte → la déplacer'),
                           SizedBox(height: 10),
-                          _HintRow('⬜  HANDLES', 'drag white dots → resize'),
+                          _HintRow('⬜  POIGNÉES', 'glisser les points blancs → redimensionner'),
                           // DATA-COLLECTION: verify hint hidden — uncomment when training
                           // SizedBox(height: 10),
                           // _HintRow('✓  VERIFY', 'lock box when aligned'),
@@ -739,19 +873,33 @@ class _MetadataSection extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (isUnprocessed) ...[
-              const Text('CONTEXT',
+              const Text('CONTEXTE',
                   style: TextStyle(
                       color: ZCTheme.textMuted,
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.5)),
               const SizedBox(height: 6),
-              ContextSelector(selected: selectedContext, onChanged: onContextChanged),
+              ContextSelector(
+                selected: selectedContext,
+                onChanged: onContextChanged,
+                displayLabels: const {
+                  CaptureContext.single: 'Seul',
+                  CaptureContext.shelf: 'Rayon',
+                  CaptureContext.checkout: 'Caisse',
+                },
+              ),
               const SizedBox(height: 12),
             ],
             _ChipRow(
-              label: 'LIGHTING',
+              label: 'ÉCLAIRAGE',
               options: const ['natural', 'dim_yellow', 'bright_white', 'neon'],
+              optionLabels: const {
+                'natural': 'Naturel',
+                'dim_yellow': 'Jaune tamisé',
+                'bright_white': 'Blanc vif',
+                'neon': 'Néon',
+              },
               selected: lighting,
               onSelected: onLightingChanged,
             ),
@@ -759,13 +907,25 @@ class _MetadataSection extends StatelessWidget {
             _ChipRow(
               label: 'ANGLE',
               options: const ['front', 'top_down', 'angled_45', 'side'],
+              optionLabels: const {
+                'front': 'Face',
+                'top_down': 'Dessus',
+                'angled_45': 'Angle 45°',
+                'side': 'Côté',
+              },
               selected: angle,
               onSelected: onAngleChanged,
             ),
             const SizedBox(height: 8),
             _ChipRow(
-              label: 'CONDITION',
+              label: 'ÉTAT',
               options: const ['good', 'damaged', 'faded', 'counterfeit'],
+              optionLabels: const {
+                'good': 'Bon',
+                'damaged': 'Endommagé',
+                'faded': 'Décoloré',
+                'counterfeit': 'Contrefaçon',
+              },
               selected: condition,
               onSelected: onConditionChanged,
             ),
@@ -773,6 +933,11 @@ class _MetadataSection extends StatelessWidget {
             _ChipRow(
               label: 'OCCLUSION',
               options: const ['none', 'partial', 'heavy'],
+              optionLabels: const {
+                'none': 'Aucune',
+                'partial': 'Partielle',
+                'heavy': 'Forte',
+              },
               selected: occlusion,
               onSelected: onOcclusionChanged,
             ),
@@ -798,7 +963,7 @@ class _MetadataSection extends StatelessWidget {
                         color: isEdgeCase ? ZCTheme.gold : ZCTheme.textMuted),
                     const SizedBox(width: 8),
                     Text(
-                      isEdgeCase ? 'EDGE CASE' : 'MARK AS EDGE CASE',
+                      isEdgeCase ? 'CAS LIMITE' : 'MARQUER COMME CAS LIMITE',
                       style: TextStyle(
                           color: isEdgeCase ? ZCTheme.gold : ZCTheme.textMuted,
                           fontSize: 11,
@@ -818,12 +983,14 @@ class _MetadataSection extends StatelessWidget {
 class _ChipRow extends StatelessWidget {
   final String label;
   final List<String> options;
+  final Map<String, String>? optionLabels;
   final String selected;
   final ValueChanged<String> onSelected;
 
   const _ChipRow({
     required this.label,
     required this.options,
+    this.optionLabels,
     required this.selected,
     required this.onSelected,
   });
@@ -846,10 +1013,11 @@ class _ChipRow extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: options.map((o) {
               final sel = o == selected;
+              final displayLabel = optionLabels?[o] ?? o;
               return Padding(
                 padding: const EdgeInsets.only(right: 6),
                 child: ChoiceChip(
-                  label: Text(o, style: const TextStyle(fontSize: 10)),
+                  label: Text(displayLabel, style: const TextStyle(fontSize: 10)),
                   selected: sel,
                   selectedColor: ZCTheme.accent,
                   backgroundColor: ZCTheme.surface,
@@ -867,6 +1035,49 @@ class _ChipRow extends StatelessWidget {
 }
 
 // ── Hint row ──────────────────────────────────
+
+class _AnnotationPlaceholder extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String desc;
+  const _AnnotationPlaceholder({
+    required this.icon,
+    required this.label,
+    required this.desc,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: ZCTheme.surfaceAlt,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: ZCTheme.border),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: ZCTheme.accent, size: 48),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              color: ZCTheme.textPrimary,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            desc,
+            style: const TextStyle(color: ZCTheme.textMuted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _HintRow extends StatelessWidget {
   final String label;
@@ -904,6 +1115,7 @@ class _BottomPanel extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onUndo;
   final VoidCallback onSave;
+  final VoidCallback onOptions;
 
   const _BottomPanel({
     required this.session,
@@ -913,6 +1125,7 @@ class _BottomPanel extends StatelessWidget {
     required this.onDelete,
     required this.onUndo,
     required this.onSave,
+    required this.onOptions,
   });
 
   @override
@@ -977,7 +1190,7 @@ class _BottomPanel extends StatelessWidget {
                                   Icon(Icons.crop_square_rounded,
                                       size: 10, color: ZCTheme.gold),
                                   const SizedBox(width: 4),
-                                  Text(ann.fullLabel,
+                                  Text(ann.displayLabel,
                                       style: TextStyle(
                                         color: isSelected
                                             ? ZCTheme.textPrimary
@@ -1010,7 +1223,7 @@ class _BottomPanel extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('${session.annotations.length} box${session.annotations.length == 1 ? '' : 'es'}',
+                        Text('${session.annotations.length} boîte${session.annotations.length == 1 ? '' : 's'}',
                             style: const TextStyle(
                                 color: ZCTheme.textSecondary, fontSize: 11)),
                         // DATA-COLLECTION: hide verified count — uncomment when training
@@ -1026,9 +1239,12 @@ class _BottomPanel extends StatelessWidget {
                     ),
                     const Spacer(),
 
+                    _Btn(icon: Icons.tune_rounded, color: ZCTheme.accent,
+                        label: 'OPTIONS', onTap: onOptions),
+                    const SizedBox(width: 8),
                     if (sel != null) ...[
                       _Btn(icon: Icons.delete_outline, color: ZCTheme.critical,
-                          label: 'DEL', onTap: onDelete),
+                          label: 'SUPPR.', onTap: onDelete),
                       const SizedBox(width: 8),
                     ],
                     // DATA-COLLECTION: verify buttons disabled until model ready
@@ -1047,7 +1263,7 @@ class _BottomPanel extends StatelessWidget {
                       onPressed: onSave,
                       icon: const Icon(Icons.save_alt, size: 15),
                       label: Text(
-                        session.saved ? 'SAVED ✓' : 'SAVE',
+                        session.saved ? 'ENREGISTRÉ ✓' : 'ENREGISTRER',
                         style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 12,
@@ -1182,7 +1398,7 @@ class _LabelPickerSheetState extends State<_LabelPickerSheet> {
             padding: EdgeInsets.symmetric(horizontal: 20),
             child: Row(
               children: [
-                Text('Which product is this?',
+                Text('Quel produit est-ce ?',
                     style: TextStyle(
                       color: ZCTheme.textPrimary,
                       fontSize: 16,
@@ -1200,7 +1416,7 @@ class _LabelPickerSheetState extends State<_LabelPickerSheet> {
               autofocus: false,
               style: const TextStyle(color: ZCTheme.textPrimary, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Search brand or label…',
+                hintText: 'Rechercher marque ou produit…',
                 prefixIcon: const Icon(Icons.search, color: ZCTheme.textMuted, size: 18),
                 isDense: true,
                 filled: true,
@@ -1218,7 +1434,7 @@ class _LabelPickerSheetState extends State<_LabelPickerSheet> {
             child: _filtered.isEmpty
                 ? const Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text('No matches',
+                    child: Text('Aucun résultat',
                         style: TextStyle(color: ZCTheme.textMuted)),
                   )
                 : ListView.builder(

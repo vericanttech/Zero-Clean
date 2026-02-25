@@ -152,8 +152,8 @@ class BBoxPainter extends CustomPainter {
     // final conf = confidences[index];
     // final confStr = conf != null ? ' ${(conf * 100).toInt()}%' : '';
     final labelText = ann.verified
-        ? '✓ ${ann.fullLabel}'
-        : ann.fullLabel; // was: '${ann.fullLabel}$confStr'
+        ? '✓ ${ann.displayLabel}'
+        : ann.displayLabel;
 
     final tp = TextPainter(
       text: TextSpan(

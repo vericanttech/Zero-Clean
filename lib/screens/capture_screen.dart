@@ -233,13 +233,13 @@ class CaptureScreenState extends State<CaptureScreen>
     );
   }
 
-  static const _guideAssetPath = 'assets/guide/capture_guide_french.pdf';
+  static const _guideAssetPath = 'assets/guide/product_photography_guide_fr.pdf';
 
   Future<void> _openCaptureGuide() async {
     try {
       final data = await rootBundle.load(_guideAssetPath);
       final tempDir = await getTemporaryDirectory();
-      final file = File('${tempDir.path}/capture_guide_french.pdf');
+      final file = File('${tempDir.path}/product_photography_guide_fr.pdf');
       await file.writeAsBytes(data.buffer.asUint8List());
       final result = await OpenFilex.open(file.path);
       if (result.type != ResultType.done && mounted) {
@@ -286,14 +286,13 @@ class CaptureScreenState extends State<CaptureScreen>
         setState(() => _exposureLocked = true);
       }
 
-      final v = state.selectedVariant!;
       final unprocessedPath = await state.buildUnprocessedPath();
       await FileSystemService.instance.captureToUnprocessed(
         unprocessedPath: unprocessedPath,
         tempImagePath: xFile.path,
+        shopId: state.selectedShop!.id!,
         shopName: state.selectedShop!.name,
-        category: state.selectedCategory!,
-        variantLabel: v.fullLabel,
+        context: state.selectedContext,
         annotations: [],
       );
 
@@ -366,7 +365,31 @@ class CaptureScreenState extends State<CaptureScreen>
             bottom: bottomPadding + 24,
             child: SafeArea(
               top: false,
-              child: Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (state.isSelectedVariantUnsynced)
+                    Container(
+                      margin: const EdgeInsets.only(left: 20, right: 20, bottom: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: ZCTheme.textMuted.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 16, color: ZCTheme.textMuted),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Ce produit sera synchronisé lorsque vous appuierez sur Sync (Config).',
+                              style: TextStyle(color: ZCTheme.textMuted, fontSize: 11),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -413,6 +436,8 @@ class CaptureScreenState extends State<CaptureScreen>
                       ),
                     ),
                   ),
+                  ],
+                ),
                 ],
               ),
             ),

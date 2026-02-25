@@ -45,6 +45,7 @@ class FileSystemService {
   Future<String> captureData({
     required String savePath,
     required String tempImagePath,
+    required String shopId,
     required Variant variant,
     required CaptureContext context,
     required List<Annotation> annotations,
@@ -65,11 +66,12 @@ class FileSystemService {
     final destImagePath = p.join(savePath, '$fileName.jpg');
     await File(tempImagePath).copy(destImagePath);
 
-    // Build JSON sidecar
+    // Build JSON sidecar (ID-based: shopId, context)
     final deviceModel = await getDeviceModel();
     final record = ImageRecord(
       imageId: '$fileName.jpg',
-      shopContext: context.name,
+      shopId: shopId,
+      context: context.name,
       width: imageWidth,
       height: imageHeight,
       annotations: annotations,

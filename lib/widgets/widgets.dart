@@ -322,15 +322,22 @@ class ZCDropdown<T> extends StatelessWidget {
 class ContextSelector extends StatelessWidget {
   final CaptureContext selected;
   final ValueChanged<CaptureContext> onChanged;
+  /// Optional display labels (e.g. French). When null, uses enum name.
+  final Map<CaptureContext, String>? displayLabels;
 
-  const ContextSelector(
-      {super.key, required this.selected, required this.onChanged});
+  const ContextSelector({
+    super.key,
+    required this.selected,
+    required this.onChanged,
+    this.displayLabels,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: CaptureContext.values.map((ctx) {
         final isSelected = ctx == selected;
+        final label = displayLabels?[ctx] ?? ctx.name.toUpperCase();
         return Expanded(
           child: GestureDetector(
             onTap: () => onChanged(ctx),
@@ -358,7 +365,7 @@ class ContextSelector extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    ctx.name.toUpperCase(),
+                    label.toUpperCase(),
                     style: TextStyle(
                       color: isSelected ? ZCTheme.accent : ZCTheme.textMuted,
                       fontSize: 9,

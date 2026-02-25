@@ -5,31 +5,31 @@
 import 'package:flutter/material.dart';
 
 class ZCTheme {
-  // ── Palette ───────────────────────────────
-  static const bg = Color(0xFF0A0C0F);
-  static const surface = Color(0xFF13161C);
-  static const surfaceAlt = Color(0xFF1A1E27);
-  static const border = Color(0xFF252A36);
+  // ── Palette (light mode — preferred in Senegal) ─────
+  static const bg = Color(0xFFF5F6F8);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceAlt = Color(0xFFEEF0F3);
+  static const border = Color(0xFFD8DCE4);
 
-  static const accent = Color(0xFF00E5C3);       // teal mint — primary action
-  static const accentDim = Color(0xFF009E88);
-  static const gold = Color(0xFFFFBF3C);          // saturated / shutter locked
-  static const critical = Color(0xFFFF4747);      // <30%
-  static const building = Color(0xFFFFBF3C);      // 30–80%
-  static const saturated = Color(0xFF00E5C3);     // >100%
+  static const accent = Color(0xFF00B89A);       // teal — primary action
+  static const accentDim = Color(0xFF008F77);
+  static const gold = Color(0xFFE5A020);         // shutter locked / building
+  static const critical = Color(0xFFD32F2F);     // <30%
+  static const building = Color(0xFFE5A020);    // 30–80%
+  static const saturated = Color(0xFF00B89A);    // >100%
 
-  static const textPrimary = Color(0xFFECEFF4);
-  static const textSecondary = Color(0xFF8A93A8);
-  static const textMuted = Color(0xFF4A5165);
+  static const textPrimary = Color(0xFF1A1D24);
+  static const textSecondary = Color(0xFF4A5165);
+  static const textMuted = Color(0xFF6B7280);
 
   // ── Typography ────────────────────────────
   // Using system fonts — in real project add "Space Mono" + "DM Sans" via google_fonts
   static const fontMono = 'monospace';
 
   static ThemeData get theme => ThemeData(
-        brightness: Brightness.dark,
+        brightness: Brightness.light,
         scaffoldBackgroundColor: bg,
-        colorScheme: const ColorScheme.dark(
+        colorScheme: const ColorScheme.light(
           surface: surface,
           primary: accent,
           secondary: gold,
@@ -84,7 +84,7 @@ class ZCTheme {
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: accent,
-            foregroundColor: bg,
+            foregroundColor: Colors.white,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             padding:

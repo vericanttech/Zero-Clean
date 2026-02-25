@@ -5,27 +5,39 @@
 import 'dart:ui'; // or import 'package:flutter/material.dart';
 
 class Shop {
-  final int? id;
+  final String? id;
   final String name;
   final String locationNote;
+  final double? latitude;
+  final double? longitude;
 
-  Shop({this.id, required this.name, this.locationNote = ''});
+  Shop({
+    this.id,
+    required this.name,
+    this.locationNote = '',
+    this.latitude,
+    this.longitude,
+  });
 
   Map<String, dynamic> toMap() => {
         'id': id,
         'name': name,
         'location_note': locationNote,
+        if (latitude != null) 'latitude': latitude,
+        if (longitude != null) 'longitude': longitude,
       };
 
   factory Shop.fromMap(Map<String, dynamic> m) => Shop(
-        id: m['id'],
-        name: m['name'],
-        locationNote: m['location_note'] ?? '',
+        id: m['id']?.toString(),
+        name: m['name'] as String? ?? '',
+        locationNote: m['location_note'] as String? ?? '',
+        latitude: (m['latitude'] as num?)?.toDouble(),
+        longitude: (m['longitude'] as num?)?.toDouble(),
       );
 }
 
 class Variant {
-  final int? id;
+  final String? id;
   final String category;
   final String brand;
   final String subBrand;
@@ -41,9 +53,14 @@ class Variant {
     required this.material,
   });
 
-  /// e.g. "Coke_Zero_330ml_CAN"
-  String get fullLabel =>
-      '${brand}_${subBrand}_${volume}_$material'.replaceAll(' ', '_');
+  /// e.g. "Coke_Zero_330ml_CAN" or "Coke_500ml_PET" when no sub-brand (single underscore).
+  String get fullLabel {
+    final parts = subBrand.trim().isEmpty
+        ? [brand, volume, material]
+        : [brand, subBrand, volume, material];
+    final joined = parts.join('_').replaceAll(' ', '_');
+    return joined.replaceAll(RegExp(r'_+'), '_');
+  }
 
   Map<String, dynamic> toMap() => {
         'id': id,
@@ -55,12 +72,12 @@ class Variant {
       };
 
   factory Variant.fromMap(Map<String, dynamic> m) => Variant(
-        id: m['id'],
-        category: m['category'],
-        brand: m['brand'],
-        subBrand: m['sub_brand'],
-        volume: m['volume'],
-        material: m['material'],
+        id: m['id']?.toString(),
+        category: m['category'] as String? ?? '',
+        brand: m['brand'] as String? ?? '',
+        subBrand: m['sub_brand'] as String? ?? '',
+        volume: m['volume'] as String? ?? '',
+        material: m['material'] as String? ?? '',
       );
 }
 
@@ -103,12 +120,13 @@ extension CaptureContextExt on CaptureContext {
 }
 
 class Progress {
-  final int? id;
-  final int variantId;
-  final int shopId;
+  final String? id;
+  final String variantId;
+  final String shopId;
   final CaptureContext context;
   int currentCount;
   final int targetCap;
+  final DateTime? lastUpdatedAt;
 
   Progress({
     this.id,
@@ -117,6 +135,7 @@ class Progress {
     required this.context,
     this.currentCount = 0,
     required this.targetCap,
+    this.lastUpdatedAt,
   });
 
   double get pct => (currentCount / targetCap).clamp(0.0, 2.0);
@@ -134,6 +153,7 @@ class Progress {
         'context': context.name,
         'current_count': currentCount,
         'target_cap': targetCap,
+        if (lastUpdatedAt != null) 'last_updated_at': lastUpdatedAt!.toIso8601String(),
       };
 
   factory Progress.fromMap(Map<String, dynamic> m) {
@@ -141,13 +161,15 @@ class Progress {
       (e) => e.name == m['context'],
       orElse: () => CaptureContext.single,
     );
+    final lastAt = m['last_updated_at'];
     return Progress(
-      id: m['id'],
-      variantId: m['variant_id'],
-      shopId: m['shop_id'],
+      id: m['id']?.toString(),
+      variantId: m['variant_id']?.toString() ?? '',
+      shopId: m['shop_id']?.toString() ?? '',
       context: ctx,
-      currentCount: m['current_count'] ?? 0,
-      targetCap: m['target_cap'] ?? ctx.targetCap,
+      currentCount: (m['current_count'] as num?)?.toInt() ?? 0,
+      targetCap: (m['target_cap'] as num?)?.toInt() ?? ctx.targetCap,
+      lastUpdatedAt: lastAt != null ? DateTime.tryParse(lastAt.toString()) : null,
     );
   }
 }
@@ -212,60 +234,84 @@ class BBox {
       'w:${w.toStringAsFixed(3)}, h:${h.toStringAsFixed(3)})';
 }
 
+/// Annotation: ID-based (variant_id + box). fullLabel optional for display / legacy JSON.
 class Annotation {
+  /// Variant document id (required for new ID-based JSON).
+  final String? variantId;
+  /// Human-readable label (from Variant.fullLabel); used for display and when reading legacy JSON).
+  final String? fullLabel;
+  // Legacy fields (only set when reading old JSON without variant_id).
   final String brand;
   final String subBrand;
   final String volume;
   final String material;
-  final String fullLabel;
   BBox bbox;
   bool verified;
 
   Annotation({
-    required this.brand,
-    required this.subBrand,
-    required this.volume,
-    required this.material,
-    required this.fullLabel,
+    this.variantId,
+    this.fullLabel,
+    this.brand = '',
+    this.subBrand = '',
+    this.volume = '',
+    this.material = '',
     required this.bbox,
     this.verified = false,
   });
 
+  /// Display label: fullLabel if set, else build from brand/subBrand/volume/material for legacy.
+  String get displayLabel =>
+      fullLabel ?? '${brand}_${subBrand}_${volume}_$material'.replaceAll(' ', '_');
+
   factory Annotation.fromMap(Map<String, dynamic> m) => Annotation(
-        brand: m['brand'] ?? '',
-        subBrand: m['sub_brand'] ?? '',
-        volume: m['volume'] ?? '',
-        material: m['material'] ?? '',
-        fullLabel: m['full_label'] ?? '',
+        variantId: m['variant_id']?.toString() ?? m['variantId']?.toString(),
+        fullLabel: m['full_label'] as String?,
+        brand: m['brand'] as String? ?? '',
+        subBrand: m['sub_brand'] as String? ?? '',
+        volume: m['volume'] as String? ?? '',
+        material: m['material'] as String? ?? '',
         bbox: BBox.fromList((m['bbox'] as List?) ?? [0.1, 0.1, 0.8, 0.8]),
-        verified: m['verified'] ?? false,
+        verified: m['verified'] as bool? ?? false,
       );
 
-  Annotation copyWith({BBox? bbox, bool? verified}) => Annotation(
+  Annotation copyWith({BBox? bbox, bool? verified, String? variantId, String? fullLabel}) => Annotation(
+        variantId: variantId ?? this.variantId,
+        fullLabel: fullLabel ?? this.fullLabel,
         brand: brand,
         subBrand: subBrand,
         volume: volume,
         material: material,
-        fullLabel: fullLabel,
         bbox: bbox ?? this.bbox.copy(),
         verified: verified ?? this.verified,
       );
 
+  /// For ID-based JSON sidecars: only variant_id, bbox, verified.
+  Map<String, dynamic> toMapIdBased() => {
+        'variant_id': variantId ?? '',
+        'bbox': bbox.toList(),
+        'verified': verified,
+      };
+
+  /// Legacy toMap (full label fields); prefer toMapIdBased() for new JSON.
   Map<String, dynamic> toMap() => {
+        if (variantId != null) 'variant_id': variantId,
         'brand': brand,
         'sub_brand': subBrand,
         'volume': volume,
         'material': material,
-        'full_label': fullLabel,
+        if (fullLabel != null) 'full_label': fullLabel,
         'bbox_mode': 'normalized_0_1',
         'bbox': bbox.toList(),
         'verified': verified,
       };
 }
 
+/// ImageRecord: ID-based sidecar. shop_id + context only; no shop_name/category/variant_label.
 class ImageRecord {
   final String imageId;
-  final String shopContext;
+  final String shopId;
+  /// single | shelf | checkout | unprocessed
+  final String context;
   final int width;
   final int height;
   final List<Annotation> annotations;
@@ -275,16 +321,12 @@ class ImageRecord {
   final String? edgeType;
   final String condition;
   final String occlusion;
-  /// Phone/device model used to capture the image (e.g. "Pixel 6", "iPhone14,2").
   final String? deviceModel;
-  // For unprocessed captures: needed when moving to context folder from nudge
-  final String? shopName;
-  final String? category;
-  final String? variantLabel;
 
   ImageRecord({
     required this.imageId,
-    required this.shopContext,
+    required this.shopId,
+    required this.context,
     required this.width,
     required this.height,
     required this.annotations,
@@ -295,19 +337,14 @@ class ImageRecord {
     this.condition = 'good',
     this.occlusion = 'none',
     this.deviceModel,
-    this.shopName,
-    this.category,
-    this.variantLabel,
   });
 
   Map<String, dynamic> toJson() => {
         'image_id': imageId,
-        'shop_context': shopContext,
+        'shop_id': shopId,
+        'context': context,
         'image_size': {'width': width, 'height': height},
-        'annotations': annotations.map((a) => a.toMap()).toList(),
-        if (shopName != null) 'shop_name': shopName,
-        if (category != null) 'category': category,
-        if (variantLabel != null) 'variant_label': variantLabel,
+        'annotations': annotations.map((a) => a.toMapIdBased()).toList(),
         'metadata': {
           'lighting': lighting,
           'angle': angle,

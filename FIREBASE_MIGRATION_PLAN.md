@@ -2,6 +2,10 @@
 
 Migrate from **local phone storage + SQLite** to **Firebase Firestore** (database) and **Firebase Storage** (processed images only). No code here—design and cost only.
 
+**Before first run (login):** In Firebase Console → Authentication → Sign-in method, enable **Email/Password**. Create users manually (no sign-up in the app).
+
+**Before first run (Firestore + Storage):** In Firebase Console create a **Firestore database** (Native mode) and enable **Storage**. Deploy Security Rules so only authenticated users can read/write. Composite indexes will be suggested when you run the app (progress by shop_id, etc.).
+
 ---
 
 ## 1. Current State
@@ -95,5 +99,3 @@ Migrate from **local phone storage + SQLite** to **Firebase Firestore** (databas
 
 Done: **one shop + coordinates**, **Unprocessed on device**, **upload only when processed and JSON validated**, **no reading images back from Firebase**.
 
-
-okey lets commit commit the current branch and then then start with the migration with a new branch commit just the esential files no need to commit every file in the project folder this is my firebase credentials. and we will need to create a loggin screen email and password no registration or sing up just logging as I will create the users manually. 

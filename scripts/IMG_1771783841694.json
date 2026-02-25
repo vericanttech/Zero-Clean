@@ -1,0 +1,47 @@
+{
+  "image_id": "IMG_1771783841694.jpg",
+  "shop_context": "single",
+  "image_size": {
+    "width": 1080,
+    "height": 2400
+  },
+  "annotations": [
+    {
+      "brand": "Orange",
+      "sub_brand": "",
+      "volume": "Unité",
+      "material": "PRODUCE",
+      "full_label": "Orange__Unité_PRODUCE",
+      "bbox_mode": "normalized_0_1",
+      "bbox": [
+        0.044140473978440065,
+        0.40891526397438815,
+        0.44081934857796357,
+        0.3350262307386047
+      ],
+      "verified": false
+    },
+    {
+      "brand": "Orange",
+      "sub_brand": "",
+      "volume": "Unité",
+      "material": "PRODUCE",
+      "full_label": "Orange__Unité_PRODUCE",
+      "bbox_mode": "normalized_0_1",
+      "bbox": [
+        0.5633357505349819,
+        0.41340815988242957,
+        0.4008789255255163,
+        0.3271278855680389
+      ],
+      "verified": false
+    }
+  ],
+  "metadata": {
+    "lighting": "natural",
+    "angle": "front",
+    "is_edge_case": false,
+    "condition": "good",
+    "occlusion": "none"
+  }
+}

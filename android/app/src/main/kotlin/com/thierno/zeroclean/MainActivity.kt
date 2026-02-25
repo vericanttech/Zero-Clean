@@ -1,4 +1,4 @@
-package com.example.zero_clean
+package com.thierno.zeroclean
 
 import io.flutter.embedding.android.FlutterActivity
 

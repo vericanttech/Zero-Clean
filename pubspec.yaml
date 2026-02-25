@@ -19,11 +19,23 @@ dependencies:
   path: ^1.9.0
   device_info_plus: ^11.0.0
 
-  # Database
+  # Local DB (SQLite) — primary read source; syncs with Firestore when online
   sqflite: ^2.3.2
+
+  # Persist current shop id so we can detect when a different user logs in on same device
+  shared_preferences: ^2.2.2
+
+  # Fuzzy string match for duplicate variant detection
+  string_similarity: ^2.1.1
 
   # State management
   provider: ^6.1.2
+
+  # Firebase (auth only for now; Firestore/Storage later)
+  firebase_core: ^3.8.1
+  firebase_auth: ^5.3.4
+  cloud_firestore: ^5.6.0
+  firebase_storage: ^12.3.6
 
   # Sensors
   sensors_plus: ^4.0.2
@@ -36,6 +48,7 @@ dependencies:
   # UI extras
   fl_chart: ^0.67.0
   permission_handler: ^11.3.1
+  geolocator: ^13.0.2
   open_filex: ^4.5.0
   share_plus: ^7.2.2
   intl: ^0.19.0

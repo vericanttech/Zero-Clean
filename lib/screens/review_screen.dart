@@ -42,81 +42,93 @@ class _ReviewScreenState extends State<ReviewScreen> {
       });
       return;
     }
-    if (_reviewFilter != 'unprocessed' && state.selectedVariant == null) {
-      setState(() {
-        _entries = [];
-        _loading = false;
-      });
-      return;
-    }
 
     setState(() => _loading = true);
     try {
       final fs = FileSystemService.instance;
-      String dirPath;
-      if (_reviewFilter == 'unprocessed') {
-        dirPath = await fs.getUnprocessedPath(shopName: state.selectedShop!.name);
-      } else {
-        final ctx = CaptureContext.values
-            .firstWhere((c) => c.name == _reviewFilter, orElse: () => CaptureContext.single);
-        dirPath = await fs.getSavePath(
-          shopName: state.selectedShop!.name,
-          category: state.selectedVariant!.category,
-          variantLabel: state.selectedVariant!.fullLabel,
-          context: ctx,
-        );
-      }
-
-      final dir = Directory(dirPath);
       final entries = <_CaptureEntry>[];
 
-      if (await dir.exists()) {
-        final files = await dir.list().toList();
-        final images = files.where((f) => f.path.endsWith('.jpg')).toList();
-        for (final img in images) {
-          final base = p.withoutExtension(img.path);
-          final jsonPath = '$base.json';
-          final jsonFile = File(jsonPath);
-          Map<String, dynamic>? meta;
-          List<Annotation> annotations = [];
-          bool isUnprocessed = _reviewFilter == 'unprocessed';
-          String? shopName;
-          String? category;
-          String? variantLabel;
+      if (_reviewFilter == 'unprocessed') {
+        final dirPath = await fs.getUnprocessedPath(shopName: state.selectedShop!.name);
+        final dir = Directory(dirPath);
 
-          if (await jsonFile.exists()) {
-            try {
-              meta = jsonDecode(await jsonFile.readAsString()) as Map<String, dynamic>;
-              final annList = meta['annotations'] as List?;
-              if (annList != null) {
-                annotations = annList
-                    .map((a) => Annotation.fromMap(a as Map<String, dynamic>))
-                    .toList();
-              }
-              if (isUnprocessed) {
+        if (await dir.exists()) {
+          final files = await dir.list().toList();
+          final images = files.where((f) => f.path.endsWith('.jpg')).toList();
+          for (final img in images) {
+            final base = p.withoutExtension(img.path);
+            final jsonPath = '$base.json';
+            final jsonFile = File(jsonPath);
+            Map<String, dynamic>? meta;
+            List<Annotation> annotations = [];
+            String? shopId;
+            String? shopName;
+            String? category;
+            String? variantLabel;
+
+            if (await jsonFile.exists()) {
+              try {
+                meta = jsonDecode(await jsonFile.readAsString()) as Map<String, dynamic>;
+                final annList = meta['annotations'] as List?;
+                if (annList != null) {
+                  annotations = annList
+                      .map((a) => Annotation.fromMap(a as Map<String, dynamic>))
+                      .toList();
+                }
+                shopId = meta['shop_id'] as String?;
                 shopName = meta['shop_name'] as String?;
                 category = meta['category'] as String?;
                 variantLabel = meta['variant_label'] as String?;
-              }
-            } catch (_) {}
-          }
+              } catch (_) {}
+            }
 
+            entries.add(_CaptureEntry(
+              imagePath: img.path,
+              jsonPath: jsonPath,
+              meta: meta,
+              annotations: annotations,
+              isUnprocessed: true,
+              shopId: shopId ?? state.selectedShop?.id,
+              shopName: shopName,
+              category: category,
+              variantLabel: variantLabel,
+            ));
+          }
+        }
+        entries.sort((a, b) => b.imagePath.compareTo(a.imagePath));
+      } else {
+        // Processed (single / shelf / checkout): reference cache, 72h retention
+        final list = await fs.listReferenceCacheImages(shopContext: _reviewFilter);
+        for (final item in list) {
+          final meta = item['meta'] as Map<String, dynamic>? ?? {};
+          List<Annotation> annotations = [];
+          final annList = meta['annotations'] as List?;
+          if (annList != null) {
+            for (final a in annList) {
+              try {
+                if (a is Map<String, dynamic>) {
+                  annotations.add(Annotation.fromMap(a));
+                }
+              } catch (_) {}
+            }
+          }
           entries.add(_CaptureEntry(
-            imagePath: img.path,
-            jsonPath: jsonPath,
+            imagePath: item['imagePath'] as String,
+            jsonPath: item['jsonPath'] as String,
             meta: meta,
             annotations: annotations,
-            isUnprocessed: isUnprocessed,
-            shopName: shopName,
-            category: category,
-            variantLabel: variantLabel,
+            isUnprocessed: false,
+            shopId: meta['shop_id'] as String?,
+            shopName: meta['shop_name'] as String?,
+            category: meta['category'] as String?,
+            variantLabel: meta['variant_label'] as String?,
           ));
         }
       }
 
       if (mounted) {
         setState(() {
-          _entries = entries.reversed.toList();
+          _entries = entries;
           _loading = false;
         });
       }
@@ -182,31 +194,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
                         Row(
                           children: [
                             Expanded(
-                              flex: 2,
-                              child: ZCDropdown<Variant>(
-                                label: 'VARIANTE',
-                                value: state.selectedVariant == null
-                                    ? null
-                                    : state.variants
-                                        .where((v) => v.id == state.selectedVariant!.id)
-                                        .firstOrNull,
-                                items: state.variants
-                                    .map((v) => DropdownMenuItem(
-                                        value: v,
-                                        child: Text(v.fullLabel,
-                                            overflow: TextOverflow.ellipsis)))
-                                    .toList(),
-                                onChanged: (v) async {
-                                  if (v != null) {
-                                    state.selectVariant(v);
-                                    await _load();
-                                  }
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              flex: 1,
                               child: ZCDropdown<String>(
                                 label: 'FILTRE',
                                 value: _reviewFilter,
@@ -243,8 +230,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
                     ? EmptyState(
                         message: _reviewFilter == 'unprocessed'
                             ? 'Aucune capture non traitée. Allez dans Capture pour en ajouter.'
-                            : 'Aucune capture pour cette variante/contexte.',
-                        actionLabel: 'Aller à Capture',
+                            : 'Les images traitées sont enregistrées dans le cloud. Pas de liste locale.',
+                        actionLabel: _reviewFilter == 'unprocessed' ? 'Aller à Capture' : null,
                         onAction: () {},
                       )
                     : GridView.builder(
@@ -254,7 +241,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
                           crossAxisCount: 3,
                           crossAxisSpacing: 4,
                           mainAxisSpacing: 4,
+                          childAspectRatio: 1,
                         ),
+                        cacheExtent: 400,
                         itemCount: _entries.length,
                         itemBuilder: (ctx, i) => _ImageTile(
                           entry: _entries[i],
@@ -269,11 +258,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
   Future<void> _openNudge(_CaptureEntry entry) async {
     final state = context.read<AppState>();
-    final variant = entry.isUnprocessed && entry.variantLabel != null
-        ? state.variants
-            .where((v) => v.fullLabel == entry.variantLabel)
-            .firstOrNull
-        : state.selectedVariant;
+    final variant = entry.variantLabel != null
+        ? state.variants.where((v) => v.fullLabel == entry.variantLabel).firstOrNull
+        : (entry.annotations.isNotEmpty && entry.annotations.first.variantId != null)
+            ? state.variants.where((v) => v.id == entry.annotations.first.variantId).firstOrNull
+            : null;
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -281,9 +270,10 @@ class _ReviewScreenState extends State<ReviewScreen> {
           imagePath: entry.imagePath,
           jsonPath: entry.jsonPath,
           initialAnnotations: entry.annotations,
-          variant: variant,
+          variant: variant ?? state.selectedVariant,
           allVariants: state.variants,
           isUnprocessed: entry.isUnprocessed,
+          shopId: entry.shopId,
           shopName: entry.shopName,
           category: entry.category,
           variantLabel: entry.variantLabel ?? state.selectedVariant?.fullLabel,
@@ -351,6 +341,7 @@ class _CaptureEntry {
   final Map<String, dynamic>? meta;
   final List<Annotation> annotations;
   final bool isUnprocessed;
+  final String? shopId;
   final String? shopName;
   final String? category;
   final String? variantLabel;
@@ -361,6 +352,7 @@ class _CaptureEntry {
     this.meta,
     this.annotations = const [],
     this.isUnprocessed = false,
+    this.shopId,
     this.shopName,
     this.category,
     this.variantLabel,
@@ -376,6 +368,7 @@ class _CaptureEntry {
 }
 
 // ── Image tile ────────────────────────────────
+// Uses cacheWidth/cacheHeight to decode thumbnails and avoid OOM with many photos.
 
 class _ImageTile extends StatelessWidget {
   final _CaptureEntry entry;
@@ -383,9 +376,14 @@ class _ImageTile extends StatelessWidget {
 
   const _ImageTile({required this.entry, required this.onTap});
 
+  /// Thumbnail size for grid; decoding at this size avoids OOM with many images.
+  static const int _cacheWidth = 300;
+  static const int _cacheHeight = 300;
+
   @override
   Widget build(BuildContext context) {
     final hasAnnotations = entry.annotations.isNotEmpty;
+    final showAnnoterChip = entry.isUnprocessed && !hasAnnotations;
 
     return GestureDetector(
       onTap: onTap,
@@ -395,15 +393,17 @@ class _ImageTile extends StatelessWidget {
           Image.file(
             File(entry.imagePath),
             fit: BoxFit.cover,
+            cacheWidth: _cacheWidth,
+            cacheHeight: _cacheHeight,
             errorBuilder: (_, __, ___) => Container(
               color: ZCTheme.surfaceAlt,
               child: const Icon(Icons.broken_image, color: ZCTheme.textMuted),
             ),
           ),
-          // Slight dim when not annotated (needs check)
-          if (!hasAnnotations)
+          // Slight dim when unprocessed and not annotated
+          if (showAnnoterChip)
             Container(color: Colors.black.withOpacity(0.2)),
-          // Box count when annotated (checked)
+          // Box count when annotated
           if (hasAnnotations)
             Positioned(
               bottom: 4,
@@ -424,8 +424,8 @@ class _ImageTile extends StatelessWidget {
                 ),
               ),
             ),
-          // Only show NUDGE when no annotations (needs to be checked)
-          if (!hasAnnotations)
+          // ANNOTER: unprocessed images that still need annotation
+          if (showAnnoterChip)
             const Positioned(
               bottom: 4,
               right: 4,
@@ -436,6 +436,28 @@ class _ImageTile extends StatelessWidget {
                   fontSize: 8,
                   fontWeight: FontWeight.w900,
                   letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          // TRAITÉ: processed images (already saved, in reference cache)
+          if (!entry.isUnprocessed)
+            Positioned(
+              bottom: 4,
+              right: 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  'TRAITÉ',
+                  style: TextStyle(
+                    color: ZCTheme.accent,
+                    fontSize: 8,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
             ),

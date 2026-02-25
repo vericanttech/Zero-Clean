@@ -9,7 +9,6 @@ import '../providers/app_state.dart';
 import '../widgets/widgets.dart';
 import '../theme.dart';
 import '../services/filesystem_service.dart';
-import 'add_shop_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -20,33 +19,21 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   String _datasetSize = '—';
-  String _datasetPath = '—';
   int _datasetBytes = 0;
 
   @override
   void initState() {
     super.initState();
     _loadStorageInfo();
-    // Retry load when dashboard is first shown with empty data (e.g. if init failed)
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final state = context.read<AppState>();
-      if (!state.isLoading &&
-          state.shops.isEmpty &&
-          state.variants.isEmpty) {
-        context.read<AppState>().refreshFromDatabase();
-      }
-    });
+    FileSystemService.instance.runRetentionCleanup();
   }
 
   Future<void> _loadStorageInfo() async {
     final fs = FileSystemService.instance;
     final bytes = await fs.getDatasetSize();
-    final path = await fs.getDatasetRootPath();
     setState(() {
       _datasetBytes = bytes;
       _datasetSize = fs.formatBytes(bytes);
-      _datasetPath = path;
     });
   }
 
@@ -68,14 +55,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             Text('-CLEAN', style: TextStyle(color: ZCTheme.textPrimary)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_business_outlined),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const AddShopScreen())),
-          ),
-          const SizedBox(width: 8),
-        ],
       ),
       body: RefreshIndicator(
         color: ZCTheme.accent,
@@ -214,35 +193,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       (s) => VariantCard(summary: s),
                     ),
 
-                  const SizedBox(height: 8),
-                  // Dataset path
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: ZCTheme.surfaceAlt,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: ZCTheme.border),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.folder_outlined,
-                            color: ZCTheme.textMuted, size: 16),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _datasetPath,
-                            style: const TextStyle(
-                              color: ZCTheme.textMuted,
-                              fontSize: 10,
-                              fontFamily: 'monospace',
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   const SizedBox(height: 24),
                 ]),
               ),
