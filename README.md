@@ -16,9 +16,14 @@ See [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) for a full description of the app
 ## Prerequisites
 
 - [Flutter](https://flutter.dev) (SDK >=3.0.0)
-- Firebase project (Auth, Firestore, Storage) with config files:
-  - Android: `android/app/google-services.json`
-  - iOS: `ios/Runner/GoogleService-Info.plist` (add on macOS when building for iOS)
+- Firebase project (Auth, Firestore, Storage)
+
+### Firebase config (do not commit)
+
+**Do not commit real API keys or config files.** Add them locally after cloning:
+
+- **Android:** Download `google-services.json` from [Firebase Console](https://console.firebase.google.com) → Project → Project settings → Your apps → Android app, and place it in `android/app/google-services.json`. Use `android/app/google-services.json.example` as a structure reference.
+- **iOS:** Download `GoogleService-Info.plist` and place it in `ios/Runner/GoogleService-Info.plist`.
 
 ---
 
